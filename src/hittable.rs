@@ -179,3 +179,232 @@ impl Hittable for HittableList {
         output_box
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::material::Material;
+
+    const EPSILON: f64 = 1e-6;
+
+    fn approx_eq(a: f64, b: f64) -> bool {
+        (a - b).abs() < EPSILON
+    }
+
+    fn vec3_approx_eq(a: Vec3, b: Vec3) -> bool {
+        approx_eq(a.x, b.x) && approx_eq(a.y, b.y) && approx_eq(a.z, b.z)
+    }
+
+    fn test_material() -> Arc<Material> {
+        Arc::new(Material::Lambertian {
+            albedo: crate::ray::Color::new(0.5, 0.5, 0.5),
+        })
+    }
+
+    // ---- HitRecord::set_face_normal ----
+
+    #[test]
+    fn hit_record_front_face() {
+        // Ray traveling in -z, normal pointing in +z => front face
+        let ray = Ray::new(Point3::new(0.0, 0.0, -5.0), Vec3::new(0.0, 0.0, 1.0));
+        let outward_normal = Vec3::new(0.0, 0.0, -1.0);
+        // direction dot outward_normal = 1.0 * -1.0 = -1.0, which is < 0 => ... wait
+        // direction is (0,0,1), outward_normal is (0,0,-1), dot = -1 < 0 => front_face = true
+        let (normal, front_face) = HitRecord::set_face_normal(&ray, outward_normal);
+        assert!(front_face);
+        assert!(vec3_approx_eq(normal, outward_normal));
+    }
+
+    #[test]
+    fn hit_record_back_face() {
+        // Ray traveling in +z, outward normal pointing in +z => back face
+        let ray = Ray::new(Point3::new(0.0, 0.0, -5.0), Vec3::new(0.0, 0.0, 1.0));
+        let outward_normal = Vec3::new(0.0, 0.0, 1.0);
+        let (normal, front_face) = HitRecord::set_face_normal(&ray, outward_normal);
+        assert!(!front_face);
+        assert!(vec3_approx_eq(normal, Vec3::new(0.0, 0.0, -1.0)));
+    }
+
+    // ---- Sphere intersection tests ----
+
+    #[test]
+    fn sphere_hit_basic() {
+        let sphere = Sphere::new(Point3::new(0.0, 0.0, -5.0), 1.0, test_material());
+        let ray = Ray::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, -1.0));
+        let hit = sphere.hit(&ray, 0.001, f64::INFINITY);
+        assert!(hit.is_some());
+        let rec = hit.unwrap();
+        assert!(approx_eq(rec.t, 4.0)); // Hit at z = -4 (front of sphere)
+        assert!(rec.front_face);
+    }
+
+    #[test]
+    fn sphere_miss() {
+        let sphere = Sphere::new(Point3::new(0.0, 0.0, -5.0), 1.0, test_material());
+        let ray = Ray::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0));
+        let hit = sphere.hit(&ray, 0.001, f64::INFINITY);
+        assert!(hit.is_none());
+    }
+
+    #[test]
+    fn sphere_hit_from_inside() {
+        // Ray originates inside the sphere
+        let sphere = Sphere::new(Point3::new(0.0, 0.0, 0.0), 10.0, test_material());
+        let ray = Ray::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0));
+        let hit = sphere.hit(&ray, 0.001, f64::INFINITY);
+        assert!(hit.is_some());
+        let rec = hit.unwrap();
+        assert!(!rec.front_face); // Hitting from inside
+    }
+
+    #[test]
+    fn sphere_hit_t_range() {
+        let sphere = Sphere::new(Point3::new(0.0, 0.0, -5.0), 1.0, test_material());
+        let ray = Ray::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, -1.0));
+        // t range that excludes the sphere (sphere is at t=4..6)
+        let hit = sphere.hit(&ray, 0.001, 3.0);
+        assert!(hit.is_none());
+    }
+
+    #[test]
+    fn sphere_hit_normal_is_unit_length() {
+        let sphere = Sphere::new(Point3::new(0.0, 0.0, -5.0), 1.0, test_material());
+        let ray = Ray::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, -1.0));
+        let rec = sphere.hit(&ray, 0.001, f64::INFINITY).unwrap();
+        assert!(approx_eq(rec.normal.length(), 1.0));
+    }
+
+    #[test]
+    fn sphere_hit_point_on_surface() {
+        let center = Point3::new(0.0, 0.0, -5.0);
+        let radius = 1.0;
+        let sphere = Sphere::new(center, radius, test_material());
+        let ray = Ray::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, -1.0));
+        let rec = sphere.hit(&ray, 0.001, f64::INFINITY).unwrap();
+        let dist = (rec.point - center).length();
+        assert!(approx_eq(dist, radius));
+    }
+
+    #[test]
+    fn sphere_bounding_box() {
+        let sphere = Sphere::new(Point3::new(1.0, 2.0, 3.0), 0.5, test_material());
+        let bbox = sphere.bounding_box();
+        assert!(vec3_approx_eq(bbox.min, Point3::new(0.5, 1.5, 2.5)));
+        assert!(vec3_approx_eq(bbox.max, Point3::new(1.5, 2.5, 3.5)));
+    }
+
+    // ---- Plane intersection tests ----
+
+    #[test]
+    fn plane_hit_basic() {
+        let plane = Plane::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            test_material(),
+        );
+        let ray = Ray::new(Point3::new(0.0, 5.0, 0.0), Vec3::new(0.0, -1.0, 0.0));
+        let hit = plane.hit(&ray, 0.001, f64::INFINITY);
+        assert!(hit.is_some());
+        let rec = hit.unwrap();
+        assert!(approx_eq(rec.t, 5.0));
+        assert!(rec.front_face);
+    }
+
+    #[test]
+    fn plane_miss_parallel_ray() {
+        let plane = Plane::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            test_material(),
+        );
+        let ray = Ray::new(Point3::new(0.0, 5.0, 0.0), Vec3::new(1.0, 0.0, 0.0));
+        let hit = plane.hit(&ray, 0.001, f64::INFINITY);
+        assert!(hit.is_none());
+    }
+
+    #[test]
+    fn plane_hit_from_below() {
+        let plane = Plane::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            test_material(),
+        );
+        let ray = Ray::new(Point3::new(0.0, -5.0, 0.0), Vec3::new(0.0, 1.0, 0.0));
+        let hit = plane.hit(&ray, 0.001, f64::INFINITY);
+        assert!(hit.is_some());
+        let rec = hit.unwrap();
+        assert!(!rec.front_face); // Hitting from below
+    }
+
+    #[test]
+    fn plane_bounding_box_is_large() {
+        let plane = Plane::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            test_material(),
+        );
+        let bbox = plane.bounding_box();
+        assert!(bbox.min.x < -1000.0);
+        assert!(bbox.max.x > 1000.0);
+    }
+
+    // ---- HittableList tests ----
+
+    #[test]
+    fn hittable_list_empty() {
+        let list = HittableList::new();
+        let ray = Ray::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, -1.0));
+        assert!(list.hit(&ray, 0.001, f64::INFINITY).is_none());
+    }
+
+    #[test]
+    fn hittable_list_single_object() {
+        let mut list = HittableList::new();
+        list.add(Box::new(Sphere::new(
+            Point3::new(0.0, 0.0, -5.0),
+            1.0,
+            test_material(),
+        )));
+        let ray = Ray::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, -1.0));
+        assert!(list.hit(&ray, 0.001, f64::INFINITY).is_some());
+    }
+
+    #[test]
+    fn hittable_list_closest_hit() {
+        let mut list = HittableList::new();
+        // Closer sphere
+        list.add(Box::new(Sphere::new(
+            Point3::new(0.0, 0.0, -3.0),
+            0.5,
+            test_material(),
+        )));
+        // Farther sphere
+        list.add(Box::new(Sphere::new(
+            Point3::new(0.0, 0.0, -10.0),
+            0.5,
+            test_material(),
+        )));
+        let ray = Ray::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, -1.0));
+        let rec = list.hit(&ray, 0.001, f64::INFINITY).unwrap();
+        // Should hit the closer sphere (at t ~ 2.5)
+        assert!(rec.t < 5.0);
+    }
+
+    #[test]
+    fn hittable_list_bounding_box_encloses_all() {
+        let mut list = HittableList::new();
+        list.add(Box::new(Sphere::new(
+            Point3::new(-5.0, 0.0, 0.0),
+            1.0,
+            test_material(),
+        )));
+        list.add(Box::new(Sphere::new(
+            Point3::new(5.0, 0.0, 0.0),
+            1.0,
+            test_material(),
+        )));
+        let bbox = list.bounding_box();
+        assert!(bbox.min.x <= -6.0);
+        assert!(bbox.max.x >= 6.0);
+    }
+}

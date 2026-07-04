@@ -58,3 +58,126 @@ impl Camera {
         )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const EPSILON: f64 = 1e-6;
+
+    fn approx_eq(a: f64, b: f64) -> bool {
+        (a - b).abs() < EPSILON
+    }
+
+    fn default_camera() -> Camera {
+        Camera::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(0.0, 0.0, -1.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            90.0,
+            16.0 / 9.0,
+            0.0, // no aperture => no DOF blur
+            1.0,
+        )
+    }
+
+    #[test]
+    fn camera_ray_origin_no_aperture() {
+        let cam = default_camera();
+        let mut rng = rand::thread_rng();
+        let ray = cam.get_ray(0.5, 0.5, &mut rng);
+        // With zero aperture, origin should always be the camera origin
+        assert!(approx_eq(ray.origin.x, 0.0));
+        assert!(approx_eq(ray.origin.y, 0.0));
+        assert!(approx_eq(ray.origin.z, 0.0));
+    }
+
+    #[test]
+    fn camera_center_ray_points_forward() {
+        let cam = default_camera();
+        let mut rng = rand::thread_rng();
+        let ray = cam.get_ray(0.5, 0.5, &mut rng);
+        // Center ray should point roughly toward -z
+        let dir = ray.direction.unit();
+        assert!(dir.z < 0.0, "Center ray should point in -z direction");
+        // x and y should be near zero for center
+        assert!(dir.x.abs() < 0.1);
+        assert!(dir.y.abs() < 0.1);
+    }
+
+    #[test]
+    fn camera_corner_rays_diverge() {
+        let cam = default_camera();
+        let mut rng = rand::thread_rng();
+        let top_left = cam.get_ray(0.0, 1.0, &mut rng);
+        let bottom_right = cam.get_ray(1.0, 0.0, &mut rng);
+
+        // Rays in opposite corners should diverge
+        let tl_dir = top_left.direction.unit();
+        let br_dir = bottom_right.direction.unit();
+        // They should be different
+        assert!((tl_dir - br_dir).length() > 0.1);
+    }
+
+    #[test]
+    fn camera_with_aperture_varies_origin() {
+        let cam = Camera::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(0.0, 0.0, -1.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            90.0,
+            16.0 / 9.0,
+            2.0, // large aperture
+            1.0,
+        );
+        let mut rng = rand::thread_rng();
+
+        let mut origins = Vec::new();
+        for _ in 0..20 {
+            let ray = cam.get_ray(0.5, 0.5, &mut rng);
+            origins.push(ray.origin);
+        }
+
+        // With a large aperture, origins should vary
+        let any_different = origins
+            .windows(2)
+            .any(|w| (w[0] - w[1]).length() > 0.001);
+        assert!(any_different, "Aperture should cause varied ray origins");
+    }
+
+    #[test]
+    fn camera_different_fov() {
+        let narrow = Camera::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(0.0, 0.0, -1.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            20.0, // narrow FOV
+            1.0,
+            0.0,
+            1.0,
+        );
+        let wide = Camera::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(0.0, 0.0, -1.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            120.0, // wide FOV
+            1.0,
+            0.0,
+            1.0,
+        );
+        let mut rng = rand::thread_rng();
+
+        // Corner ray for narrow FOV
+        let narrow_corner = narrow.get_ray(1.0, 1.0, &mut rng).direction.unit();
+        // Corner ray for wide FOV
+        let wide_corner = wide.get_ray(1.0, 1.0, &mut rng).direction.unit();
+
+        // Wide FOV corner ray should have more divergence from center (-z)
+        let narrow_angle = narrow_corner.dot(Vec3::new(0.0, 0.0, -1.0)).acos();
+        let wide_angle = wide_corner.dot(Vec3::new(0.0, 0.0, -1.0)).acos();
+        assert!(
+            wide_angle > narrow_angle,
+            "Wide FOV should produce larger angle from center"
+        );
+    }
+}
